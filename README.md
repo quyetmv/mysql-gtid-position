@@ -250,6 +250,20 @@ make build
 make clean
 ```
 
+## Support
+
+If you find this project helpful or valuable, please consider supporting its development by buying me a coffee!
+
+<a href="https://www.buymeacoffee.com/quyetmv" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" width="180" height="45" ></a>
+
+## Contact
+
+For any questions or inquiries, please contact me:
+
+- Email: [<img src="https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg" alt="Email" height="15" width="15"> quyetmv@gmail.com](mailto:quyetmv@gmail.com)
+- Telegram: [<img src="https://upload.wikimedia.org/wikipedia/commons/8/82/Telegram_logo.svg" alt="Telegram" height="15" width="15"> quyetmv](https://t.me/quyetmv)
+
+
 ## 📝 License
 
 MIT License
