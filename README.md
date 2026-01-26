@@ -81,6 +81,20 @@ make build
   -start-file "mysql-bin.000100"
 ```
 
+
+### Remote Search (Connect Directly)
+
+```bash
+# Connect truc tiep den MySQL host
+./bin/binlog-info \
+  -host 127.0.0.1 \
+  -port 3306 \
+  -user root \
+  -password secret \
+  -gtid "UUID:1-5795043" \
+  -start-file "mysql-bin.000004"
+```
+
 ### JSON Output (for automation)
 
 ```bash
@@ -184,7 +198,11 @@ GTID="7396024d-8ec5-11f0-b6ea-fa163e91516e:1-5795043"
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-dir` | string | (required) | Binlog directory path |
+| `-dir` | string | (optional) | Binlog directory path (required if -host not set) |
+| `-host` | string | (optional) | MySQL Host (required if -dir not set) |
+| `-port` | int | 3306 | MySQL Port |
+| `-user` | string | (optional) | MySQL User (required with -host) |
+| `-password` | string | (optional) | MySQL Password (required with -host) |
 | `-gtid` | string | (required) | Target GTID set to find |
 | `-pattern` | string | mysql-bin.* | Binlog file pattern |
 | `-start-file` | string | - | Start from specific binlog file |
@@ -226,7 +244,9 @@ binlog_file,start_position,commit_position,resume_position,gtid,next_gtid,timest
 ## 🏗️ How It Works
 
 1. **Parse GTID Set**: Phân tích target GTID range (e.g., `UUID:1-5795043`)
-2. **Scan Binlog Files**: Scan tuần tự hoặc song song các binlog files
+2. **Scan Binlog Files**: 
+   - **Smart Seek**: Check binlog headers (`PREVIOUS_GTIDS`) để tự động nhảy đến file chứa GTID (không cần scan tuần tự).
+   - Scan song song (Parallel) các files scan cần thiết.
 3. **Track Transactions**: 
    - Detect GTID event (transaction start)
    - Track XID event (transaction commit)
@@ -248,6 +268,18 @@ make build
 
 # Clean
 make clean
+
+# Run Performance Benchmark
+# Compare Local vs Remote search speed
+BENCHMARK_ENABLE=true \
+BENCHMARK_HOST=127.0.0.1 \
+BENCHMARK_PORT=3306 \
+BENCHMARK_USER=root \
+BENCHMARK_PASS=secret \
+BENCHMARK_DIR=/data/log \
+BENCHMARK_FILE=mysql-bin.000004 \
+BENCHMARK_GTID="UUID:1-5795043" \
+go test -v ./searcher -run TestComparePerformance
 ```
 
 ## Support

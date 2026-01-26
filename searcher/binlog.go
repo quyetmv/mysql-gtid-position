@@ -260,3 +260,84 @@ func (s *Searcher) searchBinlogFile(filepath string, targetGTID *mysql.GTIDSet) 
 
 	return result, nil
 }
+
+// CheckPreviousGTIDs parses the binlog header to check PREVIOUS_GTIDS_LOG_EVENT.
+// Returns true if the Target GTID has already been executed BEFORE this file.
+// Returns error if parsing fails.
+func (s *Searcher) CheckPreviousGTIDs(filepath string, targetGTID *mysql.GTIDSet) (bool, error) {
+	parser := s.parserFactory()
+
+	var previousGTIDs *mysql.GTIDSet
+	foundHeader := false
+
+	// We only need to scan the first few events (Header + PreviousGTIDs)
+	// Usually it's within the first 1-2KB or first few events.
+	err := parser.ParseFile(filepath, 0, func(e *replication.BinlogEvent) error {
+		if e.Header.EventType == replication.PREVIOUS_GTIDS_EVENT {
+			prevGTIDsEvent := e.Event.(*replication.PreviousGTIDsEvent)
+			gtidSet, err := mysql.ParseMysqlGTIDSet(prevGTIDsEvent.GTIDSets)
+			if err != nil {
+				return fmt.Errorf("failed to parse GTID set: %w", err)
+			}
+			previousGTIDs = &gtidSet
+			foundHeader = true
+			return fmt.Errorf("stop_scan") // Found it, stop scanning
+		}
+		
+		// If we scanned too many events without finding PREVIOUS_GTIDS, verify if it exists?
+		// Usually it is the second event after FormatDescriptionEvent.
+		// Let's rely on finding it. If we don't find it quickly (e.g. log pos > 10000), abort?
+		// For now, continue until found or EOF.
+		// Note from experience: PreviousGTIDs is ALWAYS at the beginning.
+		return nil
+	})
+
+	if err != nil && err.Error() != "stop_scan" {
+		// If file is empty or other error
+		return false, err
+	}
+
+	if !foundHeader || previousGTIDs == nil {
+		// Maybe an old binlog without PreviousGTIDs?
+		// In that case we can't skip safely, so assume false (don't skip).
+		if s.verbose {
+			fmt.Printf("⚠️  No PREVIOUS_GTIDS event found in %s\n", filepath)
+		}
+		return false, nil
+	}
+
+	// Logic:
+	// If PreviousGTIDs CONTAINS TargetGTID => Target was executed BEFORE this file.
+	// We assume TargetGTID in this context means "The specific GTID we are looking for".
+	// But targetGTID is a Set (e.g. UUID:1-100).
+	// We are looking for "Any GTID in TargetGTID set".
+	// Wait, user inputs "UUID:1-100", usually searching for the LAST executed transaction in that set?
+	// Or searching for a specific transaction?
+	// Usually user gives "UUID:1-50" meaning "I have data up to 50, I want to find where 50 happened".
+	// Or "I want to resume from 50".
+	// The tool finds the "highest GNO in range".
+	// Let's say user wants UUID:100.
+	// If PreviousGTIDs has UUID:1-150 -> UUID:100 is in PAST files. Return TRUE (Skipped).
+	// If PreviousGTIDs has UUID:1-50 -> UUID:100 is in FUTURE (or this) files. Return FALSE (Don't skip).
+	
+	// We need to check if ALL GTIDs in targetGTID are contained in previousGTIDs?
+	// No, checking if *At least one* is present?
+	// Actually, if we are looking for UUID:100.
+	// We want to know if UUID:100 exists in this file or later.
+	// IF UUID:100 is ALREADY in PreviousGTIDs, then it is NOT in this file (it was before).
+	// So we can SKIP this file if PreviousGTIDs contains TargetGTID.
+	
+	// HOWEVER, "targetGTID" passed to this func is a Set.
+	// If user passed UUID:1-100.
+	// PreviousGTIDs: UUID:1-50.
+	// Contain? No. (1-100 is not subset of 1-50).
+	// PreviousGTIDs: UUID:1-200.
+	// Contain? Yes. (1-100 is subset of 1-200).
+	// So if Contain() is true, then ALL target GTIDs are in the past. We can skip this file. YES.
+	
+	if (*previousGTIDs).Contain(*targetGTID) {
+		return true, nil // Target is in the past
+	}
+
+	return false, nil
+}

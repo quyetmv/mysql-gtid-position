@@ -69,6 +69,10 @@ func parseFlags() *models.Config {
 	flag.StringVar(&startTimeStr, "start-time", "", "Filter events after this time (format: 2006-01-02 15:04:05 or RFC3339)")
 	flag.StringVar(&endTimeStr, "end-time", "", "Filter events before this time (format: 2006-01-02 15:04:05 or RFC3339)")
 	flag.BoolVar(&cfg.FindAll, "find-all", false, "Find all GTIDs in range (not just first match)")
+	flag.StringVar(&cfg.Host, "host", "", "MySQL Host")
+	flag.IntVar(&cfg.Port, "port", 3306, "MySQL Port")
+	flag.StringVar(&cfg.User, "user", "", "MySQL User")
+	flag.StringVar(&cfg.Password, "password", "", "MySQL Password")
 
 	flag.Parse()
 
@@ -95,8 +99,14 @@ func parseFlags() *models.Config {
 }
 
 func validateConfig(cfg *models.Config) error {
-	if cfg.BinlogDir == "" {
-		return fmt.Errorf("binlog directory is required")
+	if cfg.BinlogDir == "" && cfg.Host == "" {
+		return fmt.Errorf("either binlog directory (-dir) or mysql host (-host) is required")
+	}
+	if cfg.BinlogDir != "" && cfg.Host != "" {
+		return fmt.Errorf("cannot specify both -dir and -host")
+	}
+	if cfg.Host != "" && (cfg.User == "" || cfg.Password == "") {
+		return fmt.Errorf("user and password are required when using -host")
 	}
 	if cfg.TargetGTID == "" && cfg.GTIDFile == "" {
 		return fmt.Errorf("either -gtid or -gtid-file is required")
@@ -107,6 +117,12 @@ func validateConfig(cfg *models.Config) error {
 	if _, err := os.Stat(cfg.BinlogDir); os.IsNotExist(err) {
 		return fmt.Errorf("binlog directory does not exist: %s", cfg.BinlogDir)
 	}
+	if cfg.Host != "" && cfg.FindActiveMaster {
+		return fmt.Errorf("-find-active-master is currently supported only for local binlog files (-dir)")
+	}
+	if cfg.Host != "" && cfg.StartFile == "" {
+		return fmt.Errorf("-start-file is required when using -host")
+	}
 	if !cfg.OutputFormat.IsValid() {
 		return fmt.Errorf("invalid output format: %s (must be console, csv, or json)", cfg.OutputFormat)
 	}
@@ -114,6 +130,22 @@ func validateConfig(cfg *models.Config) error {
 }
 
 func findGTIDPosition(cfg *models.Config) (*models.GTIDPosition, error) {
+	// Parse target GTID
+	targetGTID, err := parser.ParseGTID(cfg.TargetGTID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid GTID format: %v", err)
+	}
+
+	// Remote Search
+	if cfg.Host != "" {
+		if cfg.Verbose {
+			fmt.Printf("🚀 Starting remote search on %s:%d\n", cfg.Host, cfg.Port)
+		}
+		s := searcher.NewRemoteSearcher(cfg)
+		return s.Search(&targetGTID)
+	}
+
+	// Local Search
 	// Create searcher
 	s := searcher.NewSearcher(cfg)
 
@@ -127,7 +159,23 @@ func findGTIDPosition(cfg *models.Config) (*models.GTIDPosition, error) {
 		return nil, fmt.Errorf("no binlog files found")
 	}
 
-	// Filter binlog files if start-file is specified
+	// Smart File Selection:
+	// If StartFile is NOT specified, try to find the best start file using PreviousGTIDs headers
+	if cfg.StartFile == "" {
+		// Only if we found files
+		if len(binlogFiles) > 0 {
+			// Parse target GTID (needed for check)
+			targetGTIDToCheck, err := parser.ParseGTID(cfg.TargetGTID)
+			if err == nil {
+				startFile, err := s.FindStartFileUsingHeaders(binlogFiles, &targetGTIDToCheck)
+				if err == nil && startFile != "" {
+					cfg.StartFile = filepath.Base(startFile)
+				}
+			}
+		}
+	}
+
+	// Filter binlog files if start-file is specified (or auto-detected)
 	if cfg.StartFile != "" {
 		var filteredFiles []string
 		startFound := false
@@ -155,13 +203,7 @@ func findGTIDPosition(cfg *models.Config) (*models.GTIDPosition, error) {
 
 	fmt.Printf("📋 Found %d binlog files\n", len(binlogFiles))
 
-	// Parse target GTID
-	targetGTID, err := parser.ParseGTID(cfg.TargetGTID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid GTID format: %v", err)
-	}
-
-	// Handle active master detection
+	// Handle active master detection (Local only)
 	if cfg.FindActiveMaster {
 		activeMasterUUID, err := parser.FindActiveMasterUUID(&targetGTID)
 		if err != nil {

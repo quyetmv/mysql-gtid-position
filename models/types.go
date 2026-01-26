@@ -39,6 +39,10 @@ type Config struct {
 	StartTime        time.Time // Filter events after this time
 	EndTime          time.Time // Filter events before this time
 	FindAll          bool      // Find all GTIDs in range (not just first match)
+	Host             string    // MySQL Host
+	Port             int       // MySQL Port
+	User             string    // MySQL User
+	Password         string    // MySQL Password
 }
 
 // ExportFormat represents output format type
